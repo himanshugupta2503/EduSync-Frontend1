@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, Fragment } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { AuthContext } from '../../context/AuthContext';
@@ -14,6 +14,8 @@ const CourseDetail = () => {
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const fetchCourseData = async () => {
@@ -44,16 +46,30 @@ const CourseDetail = () => {
     }
   }, [courseId]);
 
+  // Show delete confirmation modal
+  const showDeleteConfirmation = () => {
+    setShowDeleteModal(true);
+  };
+  
+  // Close delete confirmation modal
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+  };
+  
+  // Handle actual course deletion
   const handleDeleteCourse = async () => {
-    if (window.confirm('Are you sure you want to delete this course? This action cannot be undone.')) {
-      try {
-        await courseService.deleteCourse(courseId);
-        toast.success('Course deleted successfully');
-        navigate('/instructor/courses');
-      } catch (error) {
-        toast.error('Failed to delete course');
-        console.error('Delete error:', error);
-      }
+    setDeleting(true);
+    try {
+      await courseService.deleteCourse(courseId);
+      toast.success('Course deleted successfully');
+      setShowDeleteModal(false);
+      // Navigate after successful deletion
+      navigate('/courses');
+    } catch (error) {
+      toast.error('Failed to delete course. Please try again.');
+      console.error('Delete error:', error);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -84,7 +100,8 @@ const CourseDetail = () => {
   }
 
   return (
-    <div className="container py-5">
+    <Fragment>
+      <div className="container py-5">
       {/* Course Header */}
       <div className="row mb-4">
         <div className="col-md-8">
@@ -106,7 +123,7 @@ const CourseDetail = () => {
             </Link>
             <button 
               className="btn btn-danger"
-              onClick={handleDeleteCourse}
+              onClick={showDeleteConfirmation}
             >
               <i className="bi bi-trash me-2"></i>Delete
             </button>
@@ -244,7 +261,62 @@ const CourseDetail = () => {
           )}
         </div>
       </div>
-    </div>
+      </div>
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="modal d-block" tabIndex="-1" role="dialog" style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
+          <div className="modal-dialog" role="document">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Confirm Course Deletion</h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  aria-label="Close" 
+                  onClick={closeDeleteModal} 
+                  disabled={deleting}
+                ></button>
+              </div>
+              <div className="modal-body">
+                <p>Are you sure you want to delete the course <strong>{course?.title}</strong>?</p>
+                <p className="text-danger">This action cannot be undone and will remove all associated content.</p>
+                
+                {course?.assessments?.length > 0 && (
+                  <div className="alert alert-warning">
+                    <i className="bi bi-exclamation-triangle me-2"></i>
+                    This course has {assessments.length} assessment{assessments.length !== 1 ? 's' : ''} that will also be deleted.
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={closeDeleteModal} 
+                  disabled={deleting}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="button" 
+                  className="btn btn-danger" 
+                  onClick={handleDeleteCourse} 
+                  disabled={deleting}
+                >
+                  {deleting ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                      Deleting...
+                    </>
+                  ) : 'Delete Course'}
+                </button>
+              </div>
+            </div>
+        </div>
+      </div>
+      )}
+    </Fragment>
   );
 };
 

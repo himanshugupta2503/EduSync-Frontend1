@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import { AuthContext } from '../../context/AuthContext';
 import courseService from '../../services/courseService';
+import { toast } from 'react-toastify';
 
 const CourseList = () => {
   const { currentUser, isInstructor } = useContext(AuthContext);
@@ -9,6 +10,41 @@ const CourseList = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [courseToDelete, setCourseToDelete] = useState(null);
+
+  // Handle course deletion confirmation modal
+  const handleDeleteClick = (course) => {
+    setCourseToDelete(course);
+    setShowConfirmModal(true);
+  };
+
+  // Handle actual course deletion
+  const handleConfirmDelete = async () => {
+    if (!courseToDelete) return;
+    
+    setDeleting(true);
+    try {
+      await courseService.deleteCourse(courseToDelete.courseId);
+      // Update courses list after deletion
+      setCourses(courses.filter(c => c.courseId !== courseToDelete.courseId));
+      toast.success(`Course "${courseToDelete.title}" has been deleted`);
+      setShowConfirmModal(false);
+      setCourseToDelete(null);
+    } catch (error) {
+      console.error('Error deleting course:', error);
+      toast.error('Failed to delete course. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Close confirmation modal
+  const handleCloseModal = () => {
+    setShowConfirmModal(false);
+    setCourseToDelete(null);
+  };
 
   useEffect(() => {
     const fetchCourses = async () => {
@@ -51,21 +87,22 @@ const CourseList = () => {
   }
 
   return (
-    <div className="container py-5">
-      <div className="row mb-4">
-        <div className="col">
-          <h1>Courses</h1>
-          <p className="text-muted">Browse all available courses</p>
-        </div>
-        {isInstructor && (
-          <div className="col-auto">
-            <Link to="/instructor/courses/create" className="btn btn-primary">
-              <i className="bi bi-plus-circle me-2"></i>
-              Create New Course
-            </Link>
+    <Fragment>
+      <div className="container py-5">
+        <div className="row mb-4">
+          <div className="col">
+            <h1>Courses</h1>
+            <p className="text-muted">Browse all available courses</p>
           </div>
-        )}
-      </div>
+          {isInstructor && (
+            <div className="col-auto">
+              <Link to="/instructor/courses/create" className="btn btn-primary">
+                <i className="bi bi-plus-circle me-2"></i>
+                Create New Course
+              </Link>
+            </div>
+          )}
+        </div>
 
       {/* Search and Filter */}
       <div className="row mb-4">
@@ -124,19 +161,67 @@ const CourseList = () => {
                   <p className="card-text text-truncate">{course.description}</p>
                 </div>
                 <div className="card-footer bg-white border-top-0">
-                  <Link 
-                    to={`/courses/${course.courseId}`} 
-                    className="btn btn-outline-primary w-100"
-                  >
-                    View Course
-                  </Link>
+                  <div className="d-flex justify-content-between">
+                    <Link 
+                      to={`/courses/${course.courseId}`} 
+                      className="btn btn-outline-primary flex-grow-1 me-2"
+                    >
+                      View Course
+                    </Link>
+                    
+                    {/* Only show delete button for instructors and their own courses */}
+                    {isInstructor && currentUser?.id === course.instructorId && (
+                      <button
+                        className="btn btn-outline-danger"
+                        onClick={() => handleDeleteClick(course)}
+                        aria-label="Delete course"
+                      >
+                        <i className="bi bi-trash"></i>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
-    </div>
+      </div>
+      
+      {/* Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="modal d-block" tabIndex="-1" role="dialog" style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
+          <div className="modal-dialog" role="document">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Confirm Deletion</h5>
+                <button type="button" className="btn-close" aria-label="Close" onClick={handleCloseModal} disabled={deleting}></button>
+              </div>
+              <div className="modal-body">
+                <p>Are you sure you want to delete the course <strong>{courseToDelete?.title}</strong>?</p>
+                <p className="text-danger">This action cannot be undone.</p>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={handleCloseModal} disabled={deleting}>Cancel</button>
+                <button 
+                  type="button" 
+                  className="btn btn-danger" 
+                  onClick={handleConfirmDelete} 
+                  disabled={deleting}
+                >
+                  {deleting ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                      Deleting...
+                    </>
+                  ) : 'Delete Course'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </Fragment>  
   );
 };
 

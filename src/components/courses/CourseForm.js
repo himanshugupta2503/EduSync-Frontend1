@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { AuthContext } from '../../context/AuthContext';
@@ -9,15 +9,19 @@ const CourseForm = () => {
   const navigate = useNavigate();
   const { currentUser } = useContext(AuthContext);
   const isEditMode = !!courseId;
+  const fileInputRef = useRef(null);
 
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     mediaUrl: ''
   });
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadType, setUploadType] = useState('url'); // 'url' or 'file'
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(isEditMode);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   useEffect(() => {
     const fetchCourse = async () => {
@@ -54,8 +58,12 @@ const CourseForm = () => {
       newErrors.description = 'Course description is required';
     }
     
-    if (formData.mediaUrl && !isValidUrl(formData.mediaUrl)) {
+    if (uploadType === 'url' && formData.mediaUrl && !isValidUrl(formData.mediaUrl)) {
       newErrors.mediaUrl = 'Please enter a valid URL';
+    }
+    
+    if (uploadType === 'file' && !selectedFile && !formData.mediaUrl) {
+      newErrors.mediaFile = 'Please select a file to upload';
     }
     
     setErrors(newErrors);
@@ -63,6 +71,15 @@ const CourseForm = () => {
   };
 
   const isValidUrl = (url) => {
+    // Basic check first
+    if (!url || url.trim() === '') return false;
+    
+    // Special case for YouTube URLs
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      return true;
+    }
+    
+    // General URL validation
     try {
       new URL(url);
       return true;
@@ -79,36 +96,143 @@ const CourseForm = () => {
     });
   };
 
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0]);
+      // Clear any previous media URL when a new file is selected
+      setFormData(prev => ({
+        ...prev,
+        mediaUrl: ''
+      }));
+    }
+  };
+
+  const handleUploadTypeChange = (type) => {
+    setUploadType(type);
+    // Clear values when switching between types
+    if (type === 'url') {
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        mediaUrl: ''
+      }));
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (!validateForm()) return;
     
     setLoading(true);
+    setUploadProgress(0);
     
     try {
+      console.log('Form submission started with data:', formData);
+      console.log('Upload type:', uploadType);
+      
+      // 1. Prepare the media URL based on upload type
+      let finalMediaUrl = '';
+      
+      // Handle file upload case
+      if (uploadType === 'file' && selectedFile) {
+        console.log('Uploading local file:', selectedFile.name, selectedFile.size, 'bytes');
+        
+        // Create a form data object for file upload
+        const fileFormData = new FormData();
+        fileFormData.append('file', selectedFile, selectedFile.name);
+        
+        // Log what we're sending for debugging
+        console.log('FormData details:', {
+          fileName: selectedFile.name,
+          fileSize: selectedFile.size,
+          fileType: selectedFile.type
+        });
+        
+        try {
+          // Upload the file to blob storage
+          const uploadResult = await courseService.uploadMedia(fileFormData, (progress) => {
+            setUploadProgress(progress);
+          });
+          
+          console.log('File upload successful. Received URL:', uploadResult.mediaUrl);
+          finalMediaUrl = uploadResult.mediaUrl;
+        } catch (uploadError) {
+          console.error('File upload failed:', uploadError);
+          throw new Error('Failed to upload media file. Please try again.');
+        }
+      } 
+      // Handle YouTube URL case
+      else if (uploadType === 'url') {
+        // Try directly testing the YouTube URL before course creation
+        try {
+          const testUrl = formData.mediaUrl.trim();
+          console.log('Using YouTube URL:', testUrl);
+          
+          // Ensure URL is properly formatted
+          let formattedUrl = testUrl;
+          if (formattedUrl && !formattedUrl.startsWith('http')) {
+            formattedUrl = 'https://' + formattedUrl;
+            console.log('Added https protocol to URL:', formattedUrl);
+          }
+          
+          // Test the URL directly with backend
+          console.log('Testing YouTube URL with backend...');
+          const testResult = await courseService.testYoutubeUrl(formattedUrl);
+          console.log('YouTube URL test successful:', testResult);
+          
+          // Use the successful URL
+          finalMediaUrl = formattedUrl;
+          console.log('Final URL to be sent to backend:', finalMediaUrl);
+        } catch (urlError) {
+          console.error('YouTube URL test failed:', urlError);
+          toast.error('Invalid YouTube URL. Please check and try again.');
+          setLoading(false);
+          return;
+        }
+      }
+      
+      // 2. Prepare course data with the final media URL
       const courseData = {
-        ...formData,
+        title: formData.title,
+        description: formData.description,
         instructorId: currentUser.userId
       };
       
+      // Only add mediaUrl if it's not empty
+      if (finalMediaUrl) {
+        courseData.mediaUrl = finalMediaUrl;
+      }
+      
+      console.log('Submitting course data to backend:', courseData);
+      
+      // 3. Create or update the course
       if (isEditMode) {
-        await courseService.updateCourse(courseId, {
+        const updatedCourse = await courseService.updateCourse(courseId, {
           courseId,
           ...courseData
         });
+        console.log('Course updated successfully:', updatedCourse);
         toast.success('Course updated successfully');
       } else {
-        await courseService.createCourse(courseData);
+        const newCourse = await courseService.createCourse(courseData);
+        console.log('Course created successfully:', newCourse);
         toast.success('Course created successfully');
       }
       
+      // 4. Navigate to the courses page
       navigate('/instructor/courses');
     } catch (error) {
       console.error('Course submission error:', error);
-      toast.error(error.response?.data?.message || 'Failed to save course. Please try again.');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to save course. Please try again.';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -169,21 +293,88 @@ const CourseForm = () => {
                 </div>
                 
                 <div className="mb-4">
-                  <label htmlFor="mediaUrl" className="form-label">Media URL</label>
-                  <input
-                    type="text"
-                    className={`form-control ${errors.mediaUrl ? 'is-invalid' : ''}`}
-                    id="mediaUrl"
-                    name="mediaUrl"
-                    value={formData.mediaUrl}
-                    onChange={handleChange}
-                    placeholder="Enter video or other media URL (optional)"
-                  />
-                  {errors.mediaUrl && <div className="invalid-feedback">{errors.mediaUrl}</div>}
-                  <div className="form-text">
-                    <i className="bi bi-info-circle me-1"></i>
-                    Enter the URL for course video content or supplementary materials.
+                  <label className="form-label">Course Media</label>
+                  
+                  <div className="btn-group w-100 mb-3" role="group">
+                    <input 
+                      type="radio" 
+                      className="btn-check" 
+                      name="uploadType" 
+                      id="urlRadio" 
+                      autoComplete="off" 
+                      checked={uploadType === 'url'}
+                      onChange={() => handleUploadTypeChange('url')}
+                    />
+                    <label className="btn btn-outline-primary" htmlFor="urlRadio">
+                      <i className="bi bi-link me-2"></i>URL
+                    </label>
+                    
+                    <input 
+                      type="radio" 
+                      className="btn-check" 
+                      name="uploadType" 
+                      id="fileRadio" 
+                      autoComplete="off"
+                      checked={uploadType === 'file'}
+                      onChange={() => handleUploadTypeChange('file')}
+                    />
+                    <label className="btn btn-outline-primary" htmlFor="fileRadio">
+                      <i className="bi bi-file-earmark-arrow-up me-2"></i>Upload File
+                    </label>
                   </div>
+                  
+                  {uploadType === 'url' ? (
+                    <>
+                      <input
+                        type="text"
+                        className={`form-control ${errors.mediaUrl ? 'is-invalid' : ''}`}
+                        id="mediaUrl"
+                        name="mediaUrl"
+                        value={formData.mediaUrl}
+                        onChange={handleChange}
+                        placeholder="Enter video or other media URL"
+                      />
+                      {errors.mediaUrl && <div className="invalid-feedback">{errors.mediaUrl}</div>}
+                      <div className="form-text">
+                        <i className="bi bi-info-circle me-1"></i>
+                        Enter the URL for course video content or supplementary materials.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={`custom-file ${errors.mediaFile ? 'is-invalid' : ''}`}>
+                        <input
+                          type="file"
+                          className="form-control"
+                          id="mediaFile"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept="video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx"
+                        />
+                        {errors.mediaFile && <div className="invalid-feedback">{errors.mediaFile}</div>}
+                      </div>
+                      {selectedFile && (
+                        <div className="form-text mt-2">
+                          <i className="bi bi-file-earmark me-1"></i>
+                          Selected file: {selectedFile.name} ({Math.round(selectedFile.size / 1024)} KB)
+                        </div>
+                      )}
+                      {uploadProgress > 0 && uploadProgress < 100 && (
+                        <div className="progress mt-2">
+                          <div 
+                            className="progress-bar progress-bar-striped progress-bar-animated" 
+                            role="progressbar" 
+                            style={{width: `${uploadProgress}%`}} 
+                            aria-valuenow={uploadProgress} 
+                            aria-valuemin="0" 
+                            aria-valuemax="100"
+                          >
+                            {uploadProgress}%
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
                 
                 <div className="d-flex justify-content-between">
